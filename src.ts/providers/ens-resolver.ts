@@ -175,11 +175,21 @@ export class EnsResolver {
     // For EIP-2544 names, the ancestor that provided the resolver
     #supports2544: null | Promise<boolean>;
 
-    #resolver: Contract;
+    readonly #resolver: Contract;
 
-    constructor(provider: AbstractProvider, address: string, name: string) {
+    readonly #universal: null | Contract;
+
+    constructor(provider: AbstractProvider, address: string, name: string, universalResolver?: boolean) {
         defineProperties<EnsResolver>(this, { provider, address, name });
-        this.#supports2544 = null;
+
+        if (universalResolver) {
+            this.#supports2544 = Promise.resolve(true);
+            this.#universal = createUniversal(provider, address);
+        } else {
+            this.#supports2544 = null;
+            this.#universal = null;
+        }
+
 
         this.#resolver = new Contract(address, [
             "function supportsInterface(bytes4) view returns (bool)",
@@ -238,18 +248,22 @@ export class EnsResolver {
             funcName = "resolve(bytes,bytes)";
         }
 
-        params.push({
-            enableCcipRead: true
-        });
+        params.push({ enableCcipRead: true });
 
         try {
-            const result = await this.#resolver[funcName](...params);
+            let result;
+            if (this.#universal) {
+                result = (await this.#universal.resolve(...params)).result;
+            } else {
+                result = await this.#resolver[funcName](...params);
+            }
 
             if (fragment) {
                 return iface.decodeFunctionResult(fragment, result)[0];
             }
 
             return result;
+
         } catch (error: any) {
             if (!isError(error, "CALL_EXCEPTION")) { throw error; }
         }
@@ -572,11 +586,86 @@ export class EnsResolver {
         return null;
     }
 
+    static async lookupAddress(provider: AbstractProvider, address: string, coinType?: number): Promise<null | string> {
+        address = getAddress(address);
+        if (coinType == null) { coinType = 60; }
+
+        // We have a Universal resolver, use it
+        const universal = await getUniversal(provider);
+        if (universal) {
+            const result = await universal.reverse(address, coinType, {
+                enableCcipRead: true
+            });
+
+            return result.primary || null;
+        }
+
+        // Use legacy reverse lookup
+
+        assert(coinType === 60, "lookupAddress coinType requires ENS Universal Resolver", "UNSUPPORTED_OPERATION", {
+            operation: "lookupAddress"
+        });
+
+        try {
+            // Legacy resolver uses namehash of the lowercase name
+            const node = namehash(`${ address.toLowerCase().substring(2) }.addr.reverse`);
+
+            const ensAddr = await EnsResolver.getEnsAddress(provider);
+            const ensContract = new Contract(ensAddr, [
+                "function resolver(bytes32) view returns (address)"
+            ], provider);
+
+            const resolver = await ensContract.resolver(node);
+            if (resolver == null || resolver === ZeroAddress) { return null; }
+
+            const resolverContract = new Contract(resolver, [
+                "function name(bytes32) view returns (string)"
+            ], provider);
+
+            const name = await resolverContract.name(node);
+
+            // Failed forward resolution
+            const check = await provider.resolveName(name);
+            if (check !== address) { return null; }
+            return name;
+
+        } catch (error) {
+            // No data was returned from the resolver
+            if (isError(error, "BAD_DATA") && error.value === "0x") {
+                return null;
+            }
+
+            // Something reverted
+            if (isError(error, "CALL_EXCEPTION")) { return null; }
+
+            throw error;
+        }
+
+        return null;
+    }
+
     /**
      *  Resolve to the ENS resolver for %%name%% using %%provider%% or
      *  ``null`` if unconfigured.
+     *
+     *  If %%preferUniversal%% and the network supports ENS Universal
+     *  Resolver, a resolver is always returned (even if the name doesn't
+     *  have one) and calls are resolved by it. The Universal Resolver is
+     *  more eth_call efficient, as it performs more on-chain, but is not
+     *  the actual resolver, if for example the setters are required.
      */
-    static async fromName(provider: AbstractProvider, name: string): Promise<null | EnsResolver> {
+    static async fromName(provider: AbstractProvider, name: string, preferUniversal?: boolean): Promise<null | EnsResolver> {
+
+        // We have a Universal Resolver, use it
+        const universal = await getUniversal(provider);
+        if (universal) {
+            if (preferUniversal) {
+                return new EnsResolver(provider, <string>universal.target, name, true);
+            }
+
+            const result = await universal.findResolver(dnsEncode(name));
+            return new EnsResolver(provider, result.resolver, name);
+        }
 
         let currentName = name;
         while (true) {
@@ -603,4 +692,24 @@ export class EnsResolver {
             currentName = currentName.split(".").slice(1).join(".");
         }
     }
+}
+
+function createUniversal(provider: AbstractProvider, address: string): Contract {
+    return new Contract(address, [
+        "function findResolver(bytes) view returns (address resolver, bytes32 node, uint offset)",
+        "function resolve(bytes name, bytes data) view returns (bytes result, address resolver)",
+        "function reverse(bytes name, uint coinType) view returns (string primary, address resolver, address reverseResolver)",
+        "error HttpError(uint16 statusCode, string statusMessage)"
+    ], provider);
+}
+
+async function getUniversal(provider: AbstractProvider): Promise<null | Contract> {
+    const network = await provider.getNetwork();
+
+    const ensPlugin = network.getPlugin<EnsPlugin>("org.ethers.plugins.network.Ens");
+    if (ensPlugin && ensPlugin.universalResolver) {
+        return createUniversal(provider, ensPlugin.universalResolver);
+    }
+
+    return null;
 }
