@@ -550,6 +550,11 @@ export class Block implements BlockParams, Iterable<string> {
     readonly receiptsRoot!: null | string;
 
     /**
+     *  The hash of the transactions.
+     */
+    readonly transactionsRoot!: null | string;
+
+    /**
      *  The total amount of blob gas consumed by the transactions
      *  within the block. See [[link-eip-4844]].
      */
@@ -630,6 +635,7 @@ export class Block implements BlockParams, Iterable<string> {
 
             stateRoot: block.stateRoot,
             receiptsRoot: block.receiptsRoot,
+            transactionsRoot: block.transactionsRoot,
         });
     }
 
@@ -673,7 +679,7 @@ export class Block implements BlockParams, Iterable<string> {
         const {
             baseFeePerGas, difficulty, extraData, gasLimit, gasUsed, hash,
             miner, prevRandao, nonce, number, parentHash, parentBeaconBlockRoot,
-            stateRoot, receiptsRoot, timestamp, transactions
+            stateRoot, receiptsRoot, transactionsRoot, timestamp, transactions
         } = this;
 
         return {
@@ -686,7 +692,7 @@ export class Block implements BlockParams, Iterable<string> {
             blobGasUsed: toJson(this.blobGasUsed),
             excessBlobGas: toJson(this.excessBlobGas),
             hash, miner, prevRandao, nonce, number, parentHash, timestamp,
-            parentBeaconBlockRoot, stateRoot, receiptsRoot,
+            parentBeaconBlockRoot, stateRoot, receiptsRoot, transactionsRoot,
             transactions,
         };
     }
