@@ -8,9 +8,11 @@
 import { getAddress } from "../address/index.js";
 import { ZeroAddress } from "../constants/index.js";
 import { Contract } from "../contract/index.js";
-import { dnsEncode, namehash } from "../hash/index.js";
 import {
-    hexlify, isHexString, toBeHex,
+    dnsEncode, ensNormalize, isValidName, namehash
+} from "../hash/index.js";
+import {
+    getNumber, hexlify, isHexString, toBeHex,
     defineProperties, encodeBase58,
     assert, assertArgument, isError,
     FetchRequest
@@ -23,6 +25,7 @@ import type { BytesLike } from "../utils/index.js";
 import type { AbstractProvider, AbstractProviderPlugin } from "./abstract-provider.js";
 import type { EnsPlugin } from "./plugins-network.js";
 import type { Provider } from "./provider.js";
+
 
 // @TODO: This should use the fetch-data:ipfs gateway
 // Trim off the ipfs:// prefix and return the default gateway URL
@@ -102,7 +105,7 @@ export abstract class MulticoinProviderPlugin implements AbstractProviderPlugin 
         defineProperties<MulticoinProviderPlugin>(this, { name });
     }
 
-    connect(proivder: Provider): MulticoinProviderPlugin {
+    connect(provider: Provider): MulticoinProviderPlugin {
         return this;
     }
 
@@ -177,19 +180,10 @@ export class EnsResolver {
 
     readonly #resolver: Contract;
 
-    readonly #universal: null | Contract;
-
-    constructor(provider: AbstractProvider, address: string, name: string, universalResolver?: boolean) {
+    constructor(provider: AbstractProvider, address: string, name: string, supportsWildcard?: boolean) {
         defineProperties<EnsResolver>(this, { provider, address, name });
 
-        if (universalResolver) {
-            this.#supports2544 = Promise.resolve(true);
-            this.#universal = createUniversal(provider, address);
-        } else {
-            this.#supports2544 = null;
-            this.#universal = null;
-        }
-
+        this.#supports2544 = (supportsWildcard != null) ? Promise.resolve(supportsWildcard): null;
 
         this.#resolver = new Contract(address, [
             "function supportsInterface(bytes4) view returns (bool)",
@@ -198,8 +192,8 @@ export class EnsResolver {
             "function addr(bytes32, uint) view returns (bytes)",
             "function text(bytes32, string) view returns (string)",
             "function contenthash(bytes32) view returns (bytes)",
+            "function name(bytes32) view returns (string)",
         ], provider);
-
     }
 
     /**
@@ -251,12 +245,7 @@ export class EnsResolver {
         params.push({ enableCcipRead: true });
 
         try {
-            let result;
-            if (this.#universal) {
-                result = (await this.#universal.resolve(...params)).result;
-            } else {
-                result = await this.#resolver[funcName](...params);
-            }
+            const result = await this.#resolver[funcName](...params);
 
             if (fragment) {
                 return iface.decodeFunctionResult(fragment, result)[0];
@@ -276,7 +265,7 @@ export class EnsResolver {
      *  provided %%coinType%% has not been configured.
      */
     async getAddress(coinType?: number): Promise<null | string> {
-        if (coinType == null) { coinType = 60; }
+        coinType = (coinType == null) ? 60: getNumber(coinType);
         if (coinType === 60) {
             try {
                 const result = await this.#fetch("addr(bytes32)");
@@ -367,6 +356,10 @@ export class EnsResolver {
             operation: "getContentHash()",
             info: { data }
         });
+    }
+
+    async getName(): Promise<null | string> {
+        return await this.#fetch("name(bytes32)");
     }
 
     /**
@@ -588,7 +581,7 @@ export class EnsResolver {
 
     static async lookupAddress(provider: AbstractProvider, address: string, coinType?: number): Promise<null | string> {
         address = getAddress(address);
-        if (coinType == null) { coinType = 60; }
+        coinType = (coinType == null) ? 60: getNumber(coinType);
 
         // We have a Universal resolver, use it
         const universal = await getUniversal(provider);
@@ -597,7 +590,10 @@ export class EnsResolver {
                 enableCcipRead: true
             });
 
-            return result.primary || null;
+            const addr = result.primary;
+            if (!isValidName(addr)) { return null; }
+
+            return addr;
         }
 
         // Use legacy reverse lookup
@@ -607,26 +603,17 @@ export class EnsResolver {
         });
 
         try {
-            // Legacy resolver uses namehash of the lowercase name
-            const node = namehash(`${ address.toLowerCase().substring(2) }.addr.reverse`);
+            const resolver = await EnsResolver.fromName(provider,
+              `${ address.toLowerCase().substring(2) }.addr.reverse`);
+            if (!resolver) { return null; }
 
-            const ensAddr = await EnsResolver.getEnsAddress(provider);
-            const ensContract = new Contract(ensAddr, [
-                "function resolver(bytes32) view returns (address)"
-            ], provider);
-
-            const resolver = await ensContract.resolver(node);
-            if (resolver == null || resolver === ZeroAddress) { return null; }
-
-            const resolverContract = new Contract(resolver, [
-                "function name(bytes32) view returns (string)"
-            ], provider);
-
-            const name = await resolverContract.name(node);
+            const name = await resolver.getName();
+            if (name == null || !isValidName(name)) { return null; }
 
             // Failed forward resolution
             const check = await provider.resolveName(name);
             if (check !== address) { return null; }
+
             return name;
 
         } catch (error) {
@@ -640,8 +627,6 @@ export class EnsResolver {
 
             throw error;
         }
-
-        return null;
     }
 
     /**
@@ -659,12 +644,16 @@ export class EnsResolver {
         // We have a Universal Resolver, use it
         const universal = await getUniversal(provider);
         if (universal) {
-            if (preferUniversal) {
-                return new EnsResolver(provider, <string>universal.target, name, true);
+            let dnsName: string;
+            try {
+                dnsName = dnsEncode(ensNormalize(name), 255);
+            } catch (error) {
+                // Should this emit an error in the provider debug event?
+                return null;
             }
 
-            const result = await universal.findResolver(dnsEncode(name));
-            return new EnsResolver(provider, result.resolver, name);
+            const result = await universal.requireResolver(dnsName);
+            return new EnsResolver(provider, result.resolver, name, result.extended);
         }
 
         let currentName = name;
@@ -696,9 +685,13 @@ export class EnsResolver {
 
 function createUniversal(provider: AbstractProvider, address: string): Contract {
     return new Contract(address, [
+        "function requireResolver(bytes) view returns ((bytes name, uint256 offset, bytes32 node, address resolver, bool extended))",
         "function findResolver(bytes) view returns (address resolver, bytes32 node, uint offset)",
         "function resolve(bytes name, bytes data) view returns (bytes result, address resolver)",
         "function reverse(bytes name, uint coinType) view returns (string primary, address resolver, address reverseResolver)",
+        "error ResolverNotFound(bytes name)",
+        "error ResolverNotContract(bytes name, address resolver)",
+        "error ReverseAddressMismatch(string primary, bytes primaryAddress)",
         "error HttpError(uint16 statusCode, string statusMessage)"
     ], provider);
 }
