@@ -155,6 +155,11 @@ const matchers = [
     new RegExp("^eip155:[0-9]+/(erc[0-9]+):(.*)$", "i"),
 ];
 
+function isEvmCoinType(coinType: number) {
+    return (coinType === 60) ||
+      (coinType >= 0x80000000 && coinType <= 0xffffffff);
+}
+
 /**
  *  A connected object to a resolved ENS name resolver, which can be
  *  used to query additional details.
@@ -280,6 +285,12 @@ export class EnsResolver {
             }
         }
 
+        if (isEvmCoinType(coinType)) {
+            const data = await this.#fetch("addr(bytes32,uint)", [ coinType ]);
+            if (isHexString(data, 20)) { return getAddress(data); }
+            return null;
+        }
+
         // Try decoding its EVM canonical chain as an EVM chain address first
         if (coinType >= 0 && coinType < 0x80000000) {
             let ethCoinType = coinType + 0x80000000;
@@ -288,6 +299,9 @@ export class EnsResolver {
             if (isHexString(data, 20)) { return getAddress(data); }
         }
 
+        // @TODO: add a new method to the MulticoinProviderPlugin and move
+        // this check above the auto-eth-decoding chunk above to give the
+        // plugin a chance to process the coinType and result
         let coinPlugin: null | MulticoinProviderPlugin = null;
         for (const plugin of this.provider.plugins) {
             if (!(plugin instanceof MulticoinProviderPlugin)) { continue; }
@@ -555,6 +569,17 @@ export class EnsResolver {
         return ensPlugin.address;
     }
 
+    static async getUniversalResolverAddress(provider: Provider): Promise<null | string> {
+        const network = await provider.getNetwork();
+
+        const ensPlugin = network.getPlugin<EnsPlugin>("org.ethers.plugins.network.Ens");
+        if (ensPlugin && ensPlugin.universalResolver) {
+            return ensPlugin.universalResolver;
+        }
+
+        return null;
+    }
+
     static async #getResolver(provider: Provider, name: string): Promise<null | string> {
         const ensAddr = await EnsResolver.getEnsAddress(provider);
 
@@ -580,11 +605,11 @@ export class EnsResolver {
     }
 
     static async lookupAddress(provider: AbstractProvider, address: string, coinType?: number): Promise<null | string> {
-        address = getAddress(address);
         coinType = (coinType == null) ? 60: getNumber(coinType);
+        if (isEvmCoinType(coinType)) { address = getAddress(address); }
 
         // We have a Universal resolver, use it
-        const universal = await getUniversal(provider);
+        const universal = await createUniversal(provider);
         if (universal) {
             const result = await universal.reverse(address, coinType, {
                 enableCcipRead: true
@@ -632,17 +657,11 @@ export class EnsResolver {
     /**
      *  Resolve to the ENS resolver for %%name%% using %%provider%% or
      *  ``null`` if unconfigured.
-     *
-     *  If %%preferUniversal%% and the network supports ENS Universal
-     *  Resolver, a resolver is always returned (even if the name doesn't
-     *  have one) and calls are resolved by it. The Universal Resolver is
-     *  more eth_call efficient, as it performs more on-chain, but is not
-     *  the actual resolver, if for example the setters are required.
      */
-    static async fromName(provider: AbstractProvider, name: string, preferUniversal?: boolean): Promise<null | EnsResolver> {
+    static async fromName(provider: AbstractProvider, name: string): Promise<null | EnsResolver> {
 
         // We have a Universal Resolver, use it
-        const universal = await getUniversal(provider);
+        const universal = await createUniversal(provider);
         if (universal) {
             let dnsName: string;
             try {
@@ -683,7 +702,10 @@ export class EnsResolver {
     }
 }
 
-function createUniversal(provider: AbstractProvider, address: string): Contract {
+async function createUniversal(provider: AbstractProvider): Promise<null | Contract> {
+    const address = await EnsResolver.getUniversalResolverAddress(provider);
+    if (!address) { return null; }
+
     return new Contract(address, [
         "function requireResolver(bytes) view returns ((bytes name, uint256 offset, bytes32 node, address resolver, bool extended))",
         "function findResolver(bytes) view returns (address resolver, bytes32 node, uint offset)",
@@ -694,15 +716,4 @@ function createUniversal(provider: AbstractProvider, address: string): Contract 
         "error ReverseAddressMismatch(string primary, bytes primaryAddress)",
         "error HttpError(uint16 statusCode, string statusMessage)"
     ], provider);
-}
-
-async function getUniversal(provider: AbstractProvider): Promise<null | Contract> {
-    const network = await provider.getNetwork();
-
-    const ensPlugin = network.getPlugin<EnsPlugin>("org.ethers.plugins.network.Ens");
-    if (ensPlugin && ensPlugin.universalResolver) {
-        return createUniversal(provider, ensPlugin.universalResolver);
-    }
-
-    return null;
 }
