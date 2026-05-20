@@ -9,6 +9,7 @@ on:
       - "src.ts/**"
       - "lib.esm/**"
       - "lib.commonjs/**"
+      - "package-lock.json"
 
 jobs:
 
