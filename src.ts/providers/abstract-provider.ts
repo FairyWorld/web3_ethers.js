@@ -1196,13 +1196,13 @@ export class AbstractProvider implements Provider {
         return null;
     }
 
-    async resolveName(name: string, coinType?: number): Promise<null | string>{
+    async resolveName(name: string, coinType?: BigNumberish): Promise<null | string>{
         const resolver = await this.getResolver(name);
         if (resolver) { return await resolver.getAddress(coinType); }
         return null;
     }
 
-    async lookupAddress(address: string, coinType?: number): Promise<null | string> {
+    async lookupAddress(address: string, coinType?: BigNumberish): Promise<null | string> {
         return await EnsResolver.lookupAddress(this, address, coinType);
     }
 
