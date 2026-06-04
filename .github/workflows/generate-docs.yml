@@ -17,6 +17,7 @@ jobs:
 
     environment: ethers-tests
     env:
+      INFURA_APIKEY: ${{ secrets.INFURA_APIKEY }}
       FAUCET_PRIVATEKEY: ${{ secrets.FAUCET_PRIVATEKEY }}
 
     steps:
