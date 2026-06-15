@@ -616,14 +616,21 @@ export class EnsResolver {
         // We have a Universal resolver, use it
         const universal = await createUniversal(provider);
         if (universal) {
-            const result = await universal.reverse(address, coinType, {
-                enableCcipRead: true
-            });
+            try {
+                const result = await universal.reverse(address, coinType, {
+                    enableCcipRead: true
+                });
 
-            const addr = result.primary;
-            if (!isValidName(addr)) { return null; }
+                const addr = result.primary;
+                if (!isValidName(addr)) { return null; }
 
-            return addr;
+                return addr;
+            } catch (e) {
+                if (isError(e, "CALL_EXCEPTION") && e.reason === "ResolverNotFound(bytes)") {
+                    return null;
+                }
+                throw e;
+            }
         }
 
         // Use legacy reverse lookup
