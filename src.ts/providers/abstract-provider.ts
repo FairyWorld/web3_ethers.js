@@ -63,6 +63,10 @@ const BN_2 = BigInt(2);
 
 const MAX_CCIP_REDIRECTS = 10;
 
+function stall(duration: number): Promise<void> {
+    return new Promise((resolve) => { setTimeout(resolve, duration); });
+}
+
 function isPromise<T = any>(value: any): value is Promise<T> {
     return (value && typeof(value.then) === "function");
 }
@@ -463,6 +467,9 @@ export class AbstractProvider implements Provider {
 
     #disableCcipRead: boolean;
 
+    #requestRate: number;
+    #requestTimes: Array<number>;
+
     #options: Required<AbstractProviderOptions>;
 
     /**
@@ -500,6 +507,24 @@ export class AbstractProvider implements Provider {
         this.#timers = new Map();
 
         this.#disableCcipRead = false;
+
+        this.#requestRate = 0;
+        this.#requestTimes = [ ];
+    }
+
+    /**
+     *  **``requestThrottle``** - throttle out-going requests to at most 1
+     *  request per %%requestThrottle%% ms. (default: no limit)
+     */
+    set _requestRate(value: null | number) {
+        if (value == null || value < 0) { value = 0; }
+        this.#requestRate = getNumber(value);
+    }
+
+    get _requestRate(): null | number {
+        const value = this.#requestRate;
+        if (value == 0) { return null; }
+        return value;
     }
 
     get pollingInterval(): number { return this.#options.pollingInterval; }
@@ -542,18 +567,40 @@ export class AbstractProvider implements Provider {
     get disableCcipRead(): boolean { return this.#disableCcipRead; }
     set disableCcipRead(value: boolean) { this.#disableCcipRead = !!value; }
 
+    #getDelay(): number {
+        let requestRate = this.#requestRate;
+        if (requestRate === 0) { return 0; }
+
+        // Remove all too-old request times
+        const requests = this.#requestTimes;
+        const now = getTime();
+        requests.push(now);
+        const scanTime = now - 1000;
+        while (requests.length && requests[0] < scanTime) { requests.shift(); }
+
+        if (requests.length < requestRate) { return 0; }
+
+        return (requests[0] + 1000) - now;
+    }
+
     // Shares multiple identical requests made during the same 250ms
     async #perform<T = any>(req: PerformActionRequest): Promise<T> {
         const timeout = this.#options.cacheTimeout;
 
         // Caching disabled
-        if (timeout < 0) { return await this._perform(req); }
+        if (timeout < 0) {
+            const delay = this.#getDelay();
+            if (delay) { await stall(delay); }
+            return await this._perform(req);
+        }
 
         // Create a tag
         const tag = getTag(req.method, req);
 
         let perform = this.#performCache.get(tag);
         if (!perform) {
+            const delay = this.#getDelay();
+            if (delay) { await stall(delay); }
             perform = this._perform(req);
 
             this.#performCache.set(tag, perform);
