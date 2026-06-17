@@ -1026,6 +1026,8 @@ export class AbstractProvider implements Provider {
          const transaction = <PerformActionTransaction>copyRequest(tx);
 
          try {
+             const delay = this.#getDelay();
+             if (delay) { await stall(delay); }
              return hexlify(await this._perform({ method: "call", transaction, blockTag }));
 
          } catch (error: any) {
