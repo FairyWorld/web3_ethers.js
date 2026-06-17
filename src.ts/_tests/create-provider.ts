@@ -1,5 +1,5 @@
 import {
-    AlchemyProvider,
+//    AlchemyProvider,
     BlockscoutProvider,
 //    AnkrProvider,
 //    CloudflareProvider,
@@ -30,6 +30,7 @@ const ethNetworks = [ "default", "mainnet", "sepolia" ];
 //const maticNetworks = [ "matic", "maticmum" ];
 
 const ProviderCreators: Array<ProviderCreator> = [
+    /*
     {
         name: "AlchemyProvider",
         networks: ethNetworks,
@@ -37,6 +38,7 @@ const ProviderCreators: Array<ProviderCreator> = [
             return new AlchemyProvider(network, "YrPw6SWb20vJDRFkhWq8aKnTQ8JRNRHM");
         }
     },
+    */
     {
         name: "BlockscoutProvider",
         //networks: ethNetworks,  // @TODO: they are backfilling some Sepolia txs
@@ -116,7 +118,8 @@ const ProviderCreators: Array<ProviderCreator> = [
         networks: ethNetworks,
         create: function(network: string) {
             const providers: Array<AbstractProvider> = [];
-            for (const providerName of [ "AlchemyProvider", "AnkrProvider", "EtherscanProvider", "InfuraProvider" ]) {
+            //for (const providerName of [ "AlchemyProvider", "AnkrProvider", "EtherscanProvider", "InfuraProvider" ])
+            for (const providerName of [ "AnkrProvider", "EtherscanProvider", "InfuraProvider" ]) {
                 const provider = getProvider(providerName, network);
                 if (provider) { providers.push(provider); }
             }
