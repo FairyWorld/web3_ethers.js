@@ -24,6 +24,8 @@ jobs:
     environment: ethers-tests
     env:
       FAUCET_PRIVATEKEY: ${{ secrets.FAUCET_PRIVATEKEY }}
+      ALCHEMY_APIKEY: ${{ secrets.ALCHEMY_APIKEY }}
+      INFURA_APIKEY: ${{ secrets.INFURA_APIKEY }}
 
     strategy:
       fail-fast: false

@@ -35,8 +35,10 @@ export default {
   // Prepare the context for running the examples
   contextify: function(context) {
     Object.assign(context, ethers);
+    context.INFURA_APIKEY = process.env.INFURA_APIKEY || undefined;
+
     //context.provider = new ethers.InfuraProvider("mainnet", "49a0efa3aaee4fd99797bfa94d8ce2f1");
-    context.provider = new ethers.InfuraProvider("mainnet", process.env.INFURA_APIKEY || undefined);
+    context.provider = new ethers.InfuraProvider("mainnet", context.INFURA_APIKEY);
     context.provider._requestRate = 1;
     context.Uint8Array = Uint8Array;
 
