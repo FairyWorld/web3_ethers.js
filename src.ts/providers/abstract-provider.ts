@@ -513,19 +513,18 @@ export class AbstractProvider implements Provider {
     }
 
     /**
-     *  **``requestThrottle``** - throttle out-going requests to at most 1
-     *  request per %%requestThrottle%% ms. (default: no limit)
+     *  Limit the number of requests per second. (default: no limit)
      */
-    set _requestRate(value: null | number) {
-        if (value == null || value < 0) { value = 0; }
-        this.#requestRate = getNumber(value);
-    }
-
     get _requestRate(): null | number {
         const value = this.#requestRate;
         if (value == 0) { return null; }
         return value;
     }
+    set _requestRate(value: null | number) {
+        if (value == null || value < 0) { value = 0; }
+        this.#requestRate = getNumber(value);
+    }
+
 
     get pollingInterval(): number { return this.#options.pollingInterval; }
 
